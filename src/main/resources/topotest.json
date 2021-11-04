@@ -1,0 +1,68 @@
+{
+  "type": "Topology",
+  "objects": {
+      "example": {
+          "type": "GeometryCollection",
+          "properties": {
+              "id": "0",
+              "timestamp": 1447360025,
+              "value": {
+                  "prop0": "abcdefgh",
+                  "prop1": "GeometryCollection"
+              }
+          },
+          "geometries":
+          [
+            {
+                "type": "Point",
+                "coordinates": [100.0, 0.0]
+            },
+            {
+                "type": "LineString",
+                "arcs": [-2]
+            }
+          ]
+      },
+      "example2": {
+          "type": "MultiLineString",
+          "properties": {
+              "id": "0",
+              "timestamp": 1447360020,
+              "value": {
+                  "prop0": "avalue0",
+                  "prop1": "LineString"
+              }
+          },
+          "arcs": [[0]]
+      },
+      "example3": {
+          "type": "MultiPolygon",
+          "properties": {
+              "id": "0",
+              "timestamp": 1447360021,
+              "value": {
+                  "prop0": "10000",
+                  "prop1": true
+              }
+          },
+          "arcs": [[[1]], [[-3]]]
+      },
+      "example4": {
+          "type": "MultiPoint",
+          "properties": {
+              "id": "0",
+              "timestamp": 1447360024,
+              "value": {
+                  "prop0": "abcdefgh",
+                  "prop1": false
+              }
+          },
+        "coordinates": [[102, 0.5], [103, 1]]
+      }
+  },
+  "arcs": [
+    [[102.0, 0], [103, 1], [104, 0], [105, 1]],
+    [[100.0, 0], [101.1, 0.0], [101.4, 1], [100, 1], [100.0, 0]],
+    [[100.0, 10], [101.2, 10.0], [101.3, 11], [100.0, 11], [100.0, 10]]
+  ]
+}

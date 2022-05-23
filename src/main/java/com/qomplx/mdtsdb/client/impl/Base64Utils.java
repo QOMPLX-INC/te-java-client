@@ -16,7 +16,7 @@ public class Base64Utils
             if(b64Class != null)
             {
                 Method encodeMethod = b64Class.getMethod("encode", new Class[]{byte[].class});
-                return (String)encodeMethod.invoke(b64Class.newInstance(), new Object[]{data});
+                return (String)encodeMethod.invoke(b64Class.getDeclaredConstructor().newInstance(), new Object[]{data});
             }
         }
         catch(ClassNotFoundException cnfe)
@@ -48,7 +48,7 @@ public class Base64Utils
             if (b64Class != null)
             {
                 Method decodeMethod = b64Class.getMethod("decodeBuffer", new Class[]{String.class});
-                return (byte[])decodeMethod.invoke(b64Class.newInstance(), new Object[]{data});
+                return (byte[])decodeMethod.invoke(b64Class.getDeclaredConstructor().newInstance(), new Object[]{data});
             }
         }
         catch(ClassNotFoundException cnfe)

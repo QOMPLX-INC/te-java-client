@@ -6,6 +6,8 @@ package com.qomplx.mdtsdb.client.impl;
 
 import java.io.*;
 import java.net.*;
+import java.net.http.*;
+import java.util.concurrent.*;
 import java.util.*;
 import java.nio.file.*;
 import java.nio.charset.*;
@@ -115,6 +117,9 @@ public class MdtsdbClientImpl
      */
     public void reloadAccessToken() throws MdtsdbException
     {
+        ExecutorService httpExecutor = null;
+        HttpClient httpClient = null;
+
         try {
             if (this.tsAuthUrl == null)
                 throw new IllegalArgumentException("invalid auth url.");
@@ -122,25 +127,31 @@ public class MdtsdbClientImpl
                 throw new IllegalArgumentException("invalid client id.");
             if (this.tsAuthClientSecret == null)
                 throw new IllegalArgumentException("invalid client secret.");
-            URL url = new URL(this.tsAuthUrl);
-            HttpURLConnection conn = (HttpURLConnection)url.openConnection();
-            String postData = String.format("client_id=%s&client_secret=%s&grant_type=client_credentials", this.tsAuthClientId, this.tsAuthClientSecret);
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setUseCaches(false);
-            conn.setDoOutput(true);
-            conn.getOutputStream().write(postData.getBytes(StandardCharsets.UTF_8));
 
-            int responseCode = conn.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder response = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-                String responseData = response.toString();
-                conn.disconnect();
+            String postData = String.format("client_id=%s&client_secret=%s&grant_type=client_credentials",
+                                            this.tsAuthClientId, this.tsAuthClientSecret);
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(new URI(this.tsAuthUrl))
+                .headers("Content-Type", "application/x-www-form-urlencoded")
+                .headers("Cache-Control", "no-cache, no-store, must-revalidate")
+                .headers("Pragma", "no-cache")
+                .headers("Expires", "0")
+                .POST(HttpRequest.BodyPublishers.ofString(postData))
+                .build();
+
+            httpExecutor = Executors.newSingleThreadExecutor();
+            httpClient = HttpClient
+                .newBuilder()
+                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .executor(httpExecutor)
+                .build();
+
+            HttpResponse<String> response = httpClient
+                .send(request, HttpResponse.BodyHandlers.ofString());
+
+            int responseCode = response.statusCode();
+            if (responseCode == 200) {
+                String responseData = response.body();
                 // parse reponse
                 JsonElement el = new JsonParser().parse(responseData);
                 if (el == null)
@@ -155,13 +166,23 @@ public class MdtsdbClientImpl
                 // set access token
                 setAccessToken(accessToken.getAsString(), tokenType.getAsString());
             } else {
-                conn.disconnect();
                 throw new IllegalArgumentException("invalid auth server response: " + responseCode);
             }
         }
         catch(Exception e)
         {
             throw new MdtsdbException(e);
+        }
+        finally
+        {
+            if(httpExecutor != null)
+            {
+                httpExecutor.shutdownNow();
+            }
+            if(httpClient != null)
+            {
+                httpClient = null;
+            }
         }
     }
 
@@ -260,7 +281,7 @@ public class MdtsdbClientImpl
      */
     public boolean getUseSSL() {
         String useSSL = options.getProperty("useSSL", "false");
-        return new Boolean(useSSL);
+        return Boolean.parseBoolean(useSSL);
     }
 
     public String getPath() {
@@ -422,9 +443,7 @@ public class MdtsdbClientImpl
             CommunicationLayer comLayer = getCommunicationLayer(MdtsdbClientImpl.QL,
                                                     MdtsdbClientImpl.MdtsdbScheme.KML.getSchemeId());
 
-            HttpURLConnection connection = comLayer.callApiMethod(q.getBytes("UTF-8"));
-            InputStreamReader inputStreamReader = new InputStreamReader(connection.getInputStream(), "UTF-8");
-            String data = inputStreamGetData(inputStreamReader);
+            String data = comLayer.callApiMethod(q.getBytes("UTF-8"));
             result = new JsonParser().parse(data).getAsJsonObject();
         }
         catch(Exception e)
@@ -1337,47 +1356,22 @@ public class MdtsdbClientImpl
     private JsonObject request0_impl(CommunicationLayer comLayer, byte[] postData) throws MdtsdbException
     {
         JsonObject result = null;
-        HttpURLConnection connection = null;
-        InputStreamReader inputStreamReader = null;
 
         try {
             String url = getPath();
             boolean is_data_ep = url.endsWith("ingest");
             Map<String, String> headers = _call_method_prepare_ep(is_data_ep);
 
-            connection = comLayer.callApiMethod(headers, postData);
-            inputStreamReader = new InputStreamReader(connection.getInputStream(), "UTF-8");
-            String data = inputStreamGetData(inputStreamReader);
+            String data = comLayer.callApiMethod(headers, postData);
             result = new JsonParser().parse(data).getAsJsonObject();
-
-            if(isDebug)
-            {
-                System.out.println("Response body:");
-                System.out.println(result.toString());
-            }
         }
         catch(Exception e)
         {
             throw new MdtsdbException(e);
         }
-        finally
-        {
-            if(connection != null)
-            {
-                connection.disconnect();
-            }
-            if(inputStreamReader != null)
-            {
-                try {
-                    inputStreamReader.close();
-                }
-                catch (IOException e) {}
-            }
-        }
 
         return result;
     }
-
 
     private JsonObject sendData(MdtsdbScheme schemeId, JsonElement sensorData) throws MdtsdbException
     {
@@ -1440,8 +1434,6 @@ public class MdtsdbClientImpl
     private JsonObject execQuery_impl(MdtsdbScheme schemeId, String script, Integer version, Boolean stream) throws MdtsdbException
     {
         JsonObject result = null;
-        HttpURLConnection connection = null;
-        InputStreamReader inputStreamReader = null;
 
         try {
             String q = String.format("q=%s&key=%s&adm=%s&stream=%d",
@@ -1460,28 +1452,12 @@ public class MdtsdbClientImpl
 
             CommunicationLayer comLayer = getCommunicationLayer(
                 version == 1 ? MdtsdbClientImpl.QL : MdtsdbClientImpl.QL2, schemeId.getSchemeId());
-            connection = comLayer.callApiMethod(q.getBytes("UTF-8"));
-            inputStreamReader = new InputStreamReader(connection.getInputStream(), "UTF-8");
-            String data = inputStreamGetData(inputStreamReader);
+            String data = comLayer.callApiMethod(q.getBytes("UTF-8"));
             result = new JsonParser().parse(data).getAsJsonObject();
         }
         catch(Exception e)
         {
             throw new MdtsdbException(e);
-        }
-        finally
-        {
-            if(connection != null)
-            {
-                connection.disconnect();
-            }
-            if(inputStreamReader != null)
-            {
-                try {
-                    inputStreamReader.close();
-                }
-                catch (IOException e) {}
-            }
         }
 
         return result;
@@ -1505,8 +1481,6 @@ public class MdtsdbClientImpl
     private String delayedQuery_impl(String uuid, MdtsdbScheme schemeId) throws MdtsdbException
     {
         String result = null;
-        HttpURLConnection connection = null;
-        InputStreamReader inputStreamReader = null;
         String key = (this.tsAppKey != null && !this.tsAppKey.isEmpty()) ? this.tsAppKey : this.tsAdmKey;
 
         try {
@@ -1515,27 +1489,11 @@ public class MdtsdbClientImpl
                 URLEncoder.encode(key, "UTF-8"));
 
             CommunicationLayer comLayer = getCommunicationLayer(MdtsdbClientImpl.RESULTS, schemeId.getSchemeId());
-            connection = comLayer.callApiMethod(q.getBytes("UTF-8"));
-            inputStreamReader = new InputStreamReader(connection.getInputStream(), "UTF-8");
-            result = inputStreamGetData(inputStreamReader);
+            result = comLayer.callApiMethod(q.getBytes("UTF-8"));
         }
         catch(Exception e)
         {
             throw new MdtsdbException(e);
-        }
-        finally
-        {
-            if(connection != null)
-            {
-                connection.disconnect();
-            }
-            if(inputStreamReader != null)
-            {
-                try {
-                    inputStreamReader.close();
-                }
-                catch (IOException e) {}
-            }
         }
 
         return result;

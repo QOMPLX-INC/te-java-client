@@ -67,7 +67,7 @@ public class IndexCases
                          .field("p1", (i - unixTime0 + 1) % 3)
                          .field("p2", "abc")
                          .field("p3", i - unixTime0 + 2)
-                         .field("p4", new Object[]{new String("v1"), new Long(100), new Double(1.2)})
+                         .field("p4", new Object[]{new String("v1"), Long.valueOf(100), Double.valueOf(1.2)})
                          .sensor(2)
                          .field("p1", (i - unixTime0 + 1) % 5)
                          .field("p2", "abc")

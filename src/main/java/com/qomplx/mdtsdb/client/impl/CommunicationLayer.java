@@ -6,12 +6,17 @@ package com.qomplx.mdtsdb.client.impl;
 
 import java.io.*;
 import java.net.*;
+import java.net.http.*;
+import java.util.concurrent.*;
 import java.text.*;
 import java.util.*;
+import java.nio.charset.*;
 
 import javax.crypto.*;
 import javax.crypto.spec.*;
 import java.security.*;
+
+import com.google.common.io.CharStreams;
 
 public class CommunicationLayer
 {
@@ -31,7 +36,7 @@ public class CommunicationLayer
 
     private String  tsEndpoint = "127.0.0.1";
     private int     tsPort     = 8080;
-    private URL     tsUrl      = null;
+    private String  tsUrl      = "";
     private String  tsPath     = "";
     private boolean useSSL     = false;
 
@@ -83,14 +88,14 @@ public class CommunicationLayer
         rfc822Date.setTimeZone(new SimpleTimeZone(0, "GMT"));
     }
 
-    public URL generateTSUrl(String tsEndpoint, int tsPort, String path) throws Exception
+    public String generateTSUrl(String tsEndpoint, int tsPort, String path) throws Exception
     {
         String p = this.useSSL ? "https://" : "http://";
         String requestUrl = String.format("%s%s:%d/%s", p, tsEndpoint, tsPort, path);
-        return new URL(requestUrl);
+        return requestUrl;
     }
 
-    public URL generateTSUrl(String tsEndpoint, int tsPort, String path, Map<String, String> parameters) throws Exception
+    public String generateTSUrl(String tsEndpoint, int tsPort, String path, Map<String, String> parameters) throws Exception
     {
         String p = this.useSSL ? "https://" : "http://";
         String requestUrl = String.format("%s%s:%d/%s", p, tsEndpoint, tsPort, path);
@@ -123,47 +128,41 @@ public class CommunicationLayer
             requestUrl += "?" + query;
         }
 
-        return new URL(requestUrl);
+        return requestUrl;
     }
 
-    public HttpURLConnection callApiMethod(byte[] bytes) throws Exception
+    public String callApiMethod(byte[] bytes) throws Exception
     {
         return callApiMethod(new LinkedHashMap<String, String>(), bytes);
     }
 
-    public HttpURLConnection callApiMethod(Map<String, String> headers, byte[] bytes) throws Exception
+    public String callApiMethod(Map<String, String> headers, byte[] bytes) throws Exception
     {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         String payloadDigest = toHex(md.digest(bytes));
-        InputStream payload = new ByteArrayInputStream(bytes);
 
         headers.putIfAbsent("Content-Type", this.tsContentType);
-        return callApiMethodImpl(true, headers, payload, payloadDigest);
+        return callApiMethodImpl(true, headers, bytes, payloadDigest);
     }
 
-    public HttpURLConnection callApiMethod(Map<String, String> headers, InputStream dataInStream, String payloadDigest) throws Exception
+    public String callApiMethod(Map<String, String> headers, byte[] bytes, String payloadDigest) throws Exception
     {
-        return callApiMethodImpl(true, headers, dataInStream, payloadDigest);
+        return callApiMethodImpl(true, headers, bytes, payloadDigest);
     }
 
-    public HttpURLConnection callApiMethodUnsigned(Map<String, String> headers, InputStream dataInStream, String payloadDigest) throws Exception
+    public String callApiMethodUnsigned(Map<String, String> headers, byte[] bytes, String payloadDigest) throws Exception
     {
-        return callApiMethodImpl(false, headers, dataInStream, payloadDigest);
+        return callApiMethodImpl(false, headers, bytes, payloadDigest);
     }
 
-    private HttpURLConnection callApiMethodImpl(boolean isSigned, Map<String, String> headers,
-                                                InputStream dataInputStream, String payloadDigest) throws Exception
+    private String callApiMethodImpl(boolean isSigned, Map<String, String> headers,
+                                     byte[] bytes, String payloadDigest) throws Exception
     {
-        URL url = this.tsUrl;
-
         if (!headers.containsKey("Date"))
-        {
             headers.put("Date", rfc822Date.format(currentTime()));
-        }
+
         if (!headers.containsKey("Content-Type"))
-        {
             headers.put("Content-Type", this.tsContentType);
-        }
 
         // generate request signature for Authorization Header
         if (isSigned)
@@ -183,94 +182,76 @@ public class CommunicationLayer
             }
         }
 
-        headers.put("Host", url.getHost());
-
         int redirectCount = 0;
         while (redirectCount < 4) // repeat requests
         {
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-            for(Map.Entry<String, String> header : headers.entrySet())
-            {
-                if(isDebug)
-                    System.out.println(header.getKey() + " " + header.getValue());
-                conn.setRequestProperty(header.getKey(), header.getValue());
-            }
-
-            conn.setRequestMethod(this.tsHttpMethod.toString());
-
-            if(this.tsHttpMethod == HttpMethod.PUT || this.tsHttpMethod == HttpMethod.POST)
-            {
-                // set streaming mode
-                if(headers.containsKey("Content-Length"))
-                    conn.setFixedLengthStreamingMode(Integer.parseInt(headers.get("Content-Length")));
-
-                if (isDebug)
-                    debugRequest(conn, dataInputStream);
-
-                conn.setDoOutput(true);
-                conn.connect();
-
-                if(dataInputStream != null)
-                {
-                    OutputStream outputStream = conn.getOutputStream();
-                    byte[] buffer = new byte[8192];
-                    int count = -1;
-                    while((count = dataInputStream.read(buffer)) != -1)
-                    {
-                        outputStream.write(buffer, 0, count);
-                    }
-                    outputStream.close();
-                }
-            }
-            else
-            {
-                if(isDebug)
-                    debugRequest(conn, dataInputStream);
-
-                conn.setDoInput(true);
-                conn.connect();
-            }
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(new URI(this.tsUrl))
+                .version(HttpClient.Version.HTTP_1_1);
 
             if(isDebug)
-                debugResponse(conn);
+            {
+                System.out.println("\n\n========================\n");
+                System.out.println("URI: " + (new URI(this.tsUrl)).toString());
+                System.out.println("Headers:");
+                for(Map.Entry<String, String> header : headers.entrySet())
+                    System.out.println("  " + header.getKey() + "=" + header.getValue());
+                System.out.println("Body:");
+                System.out.println("  " + new String(bytes, StandardCharsets.UTF_8));
+            }
+
+            for(Map.Entry<String, String> header : headers.entrySet())
+                builder = builder.headers(header.getKey(), header.getValue());
+
+            if(this.tsHttpMethod == HttpMethod.PUT || this.tsHttpMethod == HttpMethod.POST)
+                builder = builder.POST(HttpRequest.BodyPublishers.ofByteArray(bytes));
+            else
+                builder = builder.GET();
+
+            ExecutorService httpExecutor = null;
+            HttpClient client = null;
 
             try
             {
-                int responseCode = conn.getResponseCode();
+                HttpRequest request = builder.build();
 
-                // temporary redirects
-                if(responseCode == 307)
+                httpExecutor = Executors.newSingleThreadExecutor();
+                client = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .executor(httpExecutor)
+                    .build();
+
+                //HttpResponse<String> response = client
+                //    .send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<InputStream> response = client
+                    .send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+                int responseCode = response.statusCode();
+
+                if(isDebug)
                 {
-                    String location = conn.getHeaderField("Location");
-                    conn.disconnect();
-                    url = new URL(location);
-                    redirectCount += 1;
-
-                    if(dataInputStream != null)
-                    {
-                        dataInputStream.reset();
-                    }
+                    System.out.println("Response Headers:");
+                    System.out.println(response.headers().toString());
+                    System.out.println("Response Status:");
+                    System.out.println(responseCode);
                 }
-                else if(responseCode >= 200 && responseCode < 300)
+
+                if(responseCode >= 200 && responseCode < 300)
                 {
-                    if(dataInputStream != null)
-                    {
-                        dataInputStream.close();
+                    String data = CharStreams.toString(new InputStreamReader(response.body(), "UTF-8"));
+                    if(data.length() > 0 && data.charAt(0) == '\u001e') {
+                        byte[] cbuf = data.getBytes("US-ASCII");
+                        data = new String(cbuf, 1, cbuf.length - 1);
                     }
-                    return conn;
+                    if(isDebug)
+                    {
+                        System.out.println("Response Body:");
+                        System.out.println(data);
+                    }
+                    return data;
                 }
                 else
-                {
-                    if(isDebug)
-                        outputErrorResponse(conn);
-
-                    if(dataInputStream != null)
-                    {
-                        dataInputStream.close();
-                    }
                     throw new Exception("Error: " + responseCode);
-                }
             }
             catch(IOException e)
             {
@@ -278,80 +259,19 @@ public class CommunicationLayer
             }
             finally
             {
-                if(dataInputStream != null)
+                if(httpExecutor != null)
                 {
-                    dataInputStream.close();
+                    httpExecutor.shutdownNow();
                 }
-            }
+                if(client != null)
+                {
+                    client = null;
+                }
+        }
+
         }
         throw new IllegalStateException("internal");
     }
-
-    private void debugRequest(HttpURLConnection conn, InputStream dataInputStream) throws Exception
-    {
-        System.out.println("\n\n..............................\n\nRequest\n>>>");
-        System.out.println("Method: " + conn.getRequestMethod());
-
-        String[] portions= conn.getURL().toString().split("&");
-        System.out.println("URI    : " + portions[0]);
-        for(int i= 1; i < portions.length; i++)
-        {
-            System.out.println("\t &" + portions[i]);
-        }
-
-        if (conn.getRequestProperties().size() > 0)
-        {
-            System.out.println("Headers:");
-            for(Map.Entry<String, List<String>> header : conn.getRequestProperties().entrySet())
-            {
-                System.out.println("  " + header.getKey() + "=" + header.getValue().get(0));
-            }
-        }
-
-        if (dataInputStream != null && dataInputStream.markSupported())
-        {
-            System.out.println("Request body:");
-            System.out.println(getInputStreamAsString(dataInputStream));
-            dataInputStream.reset();
-            System.out.println();
-        }
-    }
-
-    private void debugResponse(HttpURLConnection conn) throws Exception
-    {
-        System.out.println("\n\n..............................\n\nResponse\n>>>");
-        System.out.println("Status: " + conn.getResponseCode() + " " + conn.getResponseMessage());
-
-        if (conn.getHeaderFields().size() > 0)
-        {
-            System.out.println("Headers:");
-            for (Map.Entry<String, List<String>> header : conn.getHeaderFields().entrySet())
-            {
-                System.out.println("  " + header.getKey() + "=" + header.getValue().get(0));
-            }
-        }
-
-        System.out.println();
-    }
-
-    private void outputErrorResponse(HttpURLConnection conn) throws UnsupportedEncodingException, IOException
-    {
-        InputStream inputStream = conn.getErrorStream();
-        if(inputStream == null)
-            return;
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getErrorStream(), "UTF-8"));
-
-        StringBuffer rawResult = new StringBuffer();
-        for(String line= null; (line = reader.readLine()) != null;)
-            rawResult.append(line);
-
-        reader.close();
-
-        System.out.println("Body:\n  " + rawResult.toString());
-        System.out.println("");
-    }
-
 
     private Date currentTime()
     {

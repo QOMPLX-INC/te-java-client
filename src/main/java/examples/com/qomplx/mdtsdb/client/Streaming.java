@@ -184,7 +184,9 @@ public class Streaming
         write(client, dataMode, packs, sensors, pts);
 
         JsonArray qs1 = new JsonArray();
-        qs1.add(String.format("select $0-$%d end.", sensors)); qs1.add(true); qs1.add("ok");
+        qs1.add(String.format("select $0-$%d end.", sensors));
+        qs1.add(true);
+        qs1.add("ok");
         JsonArray qsl = new JsonArray();
         qsl.add(qs1);
 
